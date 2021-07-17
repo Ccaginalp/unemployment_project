@@ -1,0 +1,242 @@
+#
+# This is the server logic of a Shiny web application. You can run the
+# application by clicking 'Run App' above.
+#
+# Find out more about building applications with Shiny here:
+#
+#    http://shiny.rstudio.com/
+#
+
+library(shiny)
+library(scales)
+
+function(input, output, session) {
+    
+    library(shiny)
+    library(shinyWidgets)
+    library(shinydashboard)
+    library(dplyr)
+    library(rio)
+    library(openxlsx)
+    library(tidyverse)
+    library(lubridate)
+    library(zoo)
+    library(viridis)
+    library(glue)
+    
+    # Define UI for application that draws a histogram
+    vars <- setdiff(names(iris), "Species")
+    state_choices <- c("All", state.abb)
+    
+    avg_data <- rio::import("https://www.bls.gov/lau/laucnty19.xlsx")
+    monthly_data <- rio::import("https://www.bls.gov/web/metro/laucntycur14.zip")
+    
+    
+    # Cleaning data -----------------------------------------------------------
+    
+    colnames(monthly_data) <- c("Series", "StateCode", "CountyCode", "CountyState", 
+                                "Period", "Force", "Employed", "Unemployed", "Percent")
+    monthly_data <- monthly_data %>% 
+        tail(nrow(monthly_data) - 5) %>% 
+        mutate(Period = as.yearmon(Period, "%b-%y"),
+               Unemployed = as.numeric(Unemployed),
+               Percent = as.numeric(Percent),
+               Force = as.numeric(Force),
+               LogForce = log(Force, base = 10))
+    
+    colnames(avg_data) <- c("Series", "StateCode", "CountyCode", "CountyState", 
+                            "Period", "X", "Force", "Employed", "Unemployed", "Percent")
+    avg_data <- avg_data %>% 
+        tail(nrow(avg_data) - 5) %>% 
+        mutate(Period = as.yearmon(Period, "%y"),
+               Unemployed = as.numeric(Unemployed),
+               Employ19 = as.numeric(Percent),
+               Force = as.numeric(Force),
+               LogForce = log(Force, base = 10)) %>% 
+        select(CountyState, Employ19)
+    
+    getSize <- monthly_data %>% 
+        group_by(CountyState) %>% 
+        summarise(AvgSizeRound = floor(mean(LogForce)),
+                  AvgSize = mean(LogForce),
+                  PeakUnemp = max(Percent)) %>% 
+        mutate(AvgSizeRound = as.factor(AvgSizeRound))
+    
+    monthly_data <- monthly_data %>% 
+        left_join(getSize, by = "CountyState") %>% 
+        left_join(avg_data, by = "CountyState") %>% 
+        separate(CountyState, c("County", "State"), sep = ",") %>% 
+        mutate(State = trimws(State),
+               Recovery = 100 * (PeakUnemp - Percent) / pmax(PeakUnemp - Employ19, 1))
+    
+    
+    # source("../../clean/1_download_data.R")
+    # source("../../clean/2_clean_data.R")
+    # source("../../scripts/1_read_data.R")
+    # source("../../scripts/2_set_initial_vars.R")
+    state_choices <- c("All", sort(c(state.abb, "DC")))
+    
+    
+    
+    select_state <- reactive({
+        x <- c(input$checka, input$checkb, input$checkc)
+    })
+    
+    
+    filtered_monthly_data <- reactive({
+        monthly_data %>% 
+            filter(State %in% select_state()) %>% 
+            filter(!is.na(AvgSizeRound)) %>% 
+            group_by(Period, AvgSizeRound) %>% 
+            summarise(AggPercent = sum(100 * Unemployed) / sum(Force),
+                      AvgPercent = sum(Force * Employ19) / sum(Force))
+    })
+    
+    output$unemp_plot <- renderPlot({
+        filtered_monthly_data() %>% 
+            ggplot() +
+            geom_line(aes(Period, AggPercent, group = AvgSizeRound, col = as.factor(AvgSizeRound)), size = 1) +
+            geom_point(aes(Period, AggPercent, group = AvgSizeRound, col = as.factor(AvgSizeRound)), size = 2) +
+            geom_hline(aes(yintercept = AvgPercent, col = as.factor(AvgSizeRound))) +
+            scale_color_viridis(discrete=TRUE) +
+            labs(x = "Time",
+                 y = "Unemployment [%]",
+                 color = "Log_10 labor force") +
+            scale_x_yearmon(format = "%h'%y",
+                            breaks = unique(monthly_data$Period)) +
+            scale_y_continuous(breaks = c(seq(2, 20, by = 2)))
+    })
+    
+    observe({
+        if(input$selectall == 0) return(NULL)
+        else if (input$selectall%%2 == 1)
+        {
+            updateCheckboxGroupInput(session, "checka", NULL, choices = state_choices[1:17])
+            updateCheckboxGroupInput(session, "checkb", NULL, choices = state_choices[18:34])
+            updateCheckboxGroupInput(session, "checkc", NULL, choices = state_choices[35:51])
+        }
+        else
+        {
+            updateCheckboxGroupInput(session, "checka", NULL, choices = state_choices[1:17],
+                                     selected = state_choices[1:17])
+            updateCheckboxGroupInput(session, "checkb", NULL, choices = state_choices[18:34],
+                                     selected = state_choices[18:34])
+            updateCheckboxGroupInput(session, "checkc", NULL, choices = state_choices[35:51],
+                                     selected = state_choices[35:51])
+        }
+    })
+    
+    #### Second tab
+    
+    # select_state2 <- reactive({
+    #     input$county_state
+    # })
+    
+    filtered_monthly_data2 <- reactive({
+        monthly_data %>% 
+            filter(State == input$county_state)
+    })
+    
+    output$county_UI <- renderUI({
+        selectInput("county", "County",
+                    choices = c("Statewide", unique(filtered_monthly_data2()$County)),
+                    selected = "NA"
+                    )
+    })
+    
+    county_data <- reactive({
+        if (input$county == "Statewide"){
+            filtered_monthly_data2() %>% 
+                group_by(State, Period) %>% 
+                summarise(Percent = sum(Force * Percent) / sum(Force))
+        } else {
+            filtered_monthly_data2() %>% 
+                filter(County == input$county)
+        }
+    })
+    
+    
+    
+    county_plot_title <- reactive({
+        if (input$county == "Statewide"){
+            glue("Unemployment for {input$county_state} (statewide)")
+        }
+        else {
+            glue("Unemployment for {input$county}, {input$county_state}")
+        }
+    })
+    
+    
+    output$unemp_county_plot <- renderPlot({
+        county_data() %>% 
+            ggplot() +
+            geom_line(aes(Period, Percent), size = 1) +
+            geom_point(aes(Period, Percent), size = 2) +
+            scale_color_viridis(discrete=TRUE) +
+            labs(x = "Time",
+                 y = "Unemployment [%]",
+                 color = "Log_10 labor force",
+                 title = county_plot_title()) +
+            scale_x_yearmon(format = "%h'%y",
+                            breaks = unique(monthly_data$Period)) +
+            # scale_x_date(labels = date_format("%h-%y"),
+            #              breaks = seq(from = min(county_data()$Period),
+            #                           to = max(county_data()$Period),
+            #                           by = "month")) +
+            scale_y_continuous(breaks = c(seq(2, 20, by = 2)))
+    })
+    
+    ## Third tab: county recovery
+    
+    
+    filtered_monthly_data3 <- reactive({
+        monthly_data %>% 
+            filter(State == input$county_state_recov)
+    })
+    
+    output$county_UI_recov <- renderUI({
+        selectInput("county_recov", "County",
+                    choices = c("Statewide", unique(filtered_monthly_data3()$County)),
+                    selected = "Statewide"
+        )
+    })
+    
+    county_recov_data <- reactive({
+        if (input$county_recov == "Statewide"){
+            filtered_monthly_data3() %>% 
+                group_by(State, Period) %>% 
+                summarise(StatePercent = sum(Force * Percent) / sum(Force),
+                          StatePeak = sum(Force * PeakUnemp) / sum(Force),
+                          StateEmploy19 = sum(Force * Employ19) / sum(Force)) %>% 
+                mutate(Recovery = 100 * (StatePeak - StatePercent) / (StatePeak - StateEmploy19))
+        } else {
+            filtered_monthly_data3() %>% 
+                filter(County == input$county_recov)
+        }
+    })
+    
+    recov_plot_title <- reactive({
+        if (input$county_recov == "Statewide"){
+            glue("Recovery from peak unemployment for {input$county_state_recov} (statewide)")
+        }
+        else {
+            glue("Recovery from peak unemployment for {input$county_recov}, {input$count_state_recov}")
+        }
+    })
+    
+    
+    output$county_recov_plot <- renderPlot({
+        county_recov_data() %>% 
+            ggplot() +
+            geom_line(aes(Period, Recovery), size = 1) +
+            geom_point(aes(Period, Recovery), size = 2) +
+            scale_color_viridis(discrete=TRUE) +
+            labs(x = "Time",
+                 y = "Recovery from Peak Unemployment [%]",
+                 color = "Log_10 pop size",
+                 title = recov_plot_title()) +
+            scale_x_yearmon(format = "%h'%y",
+                            breaks = unique(monthly_data$Period)) +
+            scale_y_continuous(breaks = c(seq(0, 200, by = 5)))
+    })
+}

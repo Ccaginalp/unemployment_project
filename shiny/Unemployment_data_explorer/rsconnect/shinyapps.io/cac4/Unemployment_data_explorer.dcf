@@ -1,0 +1,13 @@
+name: Unemployment_data_explorer
+title: Unemployment_data_explorer
+username:
+account: cac4
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 4394442
+bundleId: 4828241
+url: https://cac4.shinyapps.io/Unemployment_data_explorer/
+when: 1626496729.84177
+lastSyncTime: 1626496729.84177
+asMultiple: FALSE
+asStatic: FALSE

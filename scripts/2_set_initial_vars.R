@@ -1,0 +1,1 @@
+state_choices <- c("All", sort(c(state.abb, "DC")))
