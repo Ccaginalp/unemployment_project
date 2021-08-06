@@ -23,10 +23,16 @@ function(input, output, session) {
     library(zoo)
     library(viridis)
     library(glue)
+    library(usmap)
     
     # Define UI for application that draws a histogram
     vars <- setdiff(names(iris), "Species")
     state_choices <- c("All", state.abb)
+    early_unemp_states <- c("AK", "MO", "MS", "IA", "AL", "ID", "IN", "NE",
+                            "NH", "ND", "WV", "WY", "AR", "FL", "GA", "MO",
+                            "OH", "OK", "SC", "SD", "TX", "UT", "MD", "TN",
+                            "AZ", "LA")
+    cluster_legend <- c("Benefit end status")
     
     avg_data <- rio::import("https://www.bls.gov/lau/laucnty19.xlsx")
     monthly_data <- rio::import("https://www.bls.gov/web/metro/laucntycur14.zip")
@@ -55,26 +61,34 @@ function(input, output, session) {
                LogForce = log(Force, base = 10)) %>% 
         select(CountyState, Employ19)
     
-    getSize <- monthly_data %>% 
+    getSize <- monthly_data %>%
+        filter(!is.na(LogForce)) %>% 
         group_by(CountyState) %>% 
-        summarise(AvgSizeRound = floor(mean(LogForce)),
+        summarise(AvgSizeRoundNum = 10 ** floor(mean(LogForce)),
+                  AvgSizeRound = 10 ** floor(mean(LogForce)) %>% format(., big.mark = ","),
                   AvgSize = mean(LogForce),
                   PeakUnemp = max(Percent)) %>% 
         mutate(AvgSizeRound = as.factor(AvgSizeRound))
+    getSize$AvgSizeRound <- factor(getSize$AvgSizeRound, labels = sort(unique(getSize$AvgSizeRound) %>% 
+                                                                           gsub(",", "", .) %>% 
+                                                                           as.numeric() %>% 
+                                                                           format(., big.mark = ",")))
+    # The things we do for properly formatted labels!
     
     monthly_data <- monthly_data %>% 
         left_join(getSize, by = "CountyState") %>% 
         left_join(avg_data, by = "CountyState") %>% 
         separate(CountyState, c("County", "State"), sep = ",") %>% 
         mutate(State = trimws(State),
-               Recovery = 100 * (PeakUnemp - Percent) / pmax(PeakUnemp - Employ19, 1))
+               Recovery = 100 * (PeakUnemp - Percent) / pmax(PeakUnemp - Employ19, 1)) %>% 
+        filter(State != "PR")
     
     
     # source("../../clean/1_download_data.R")
     # source("../../clean/2_clean_data.R")
     # source("../../scripts/1_read_data.R")
     # source("../../scripts/2_set_initial_vars.R")
-    state_choices <- c("All", sort(c(state.abb, "DC")))
+    state_choices <- c(sort(c(state.abb, "DC")))
     
     
     
@@ -101,7 +115,7 @@ function(input, output, session) {
             scale_color_viridis(discrete=TRUE) +
             labs(x = "Time",
                  y = "Unemployment [%]",
-                 color = "Log_10 labor force") +
+                 color = "Labor force size") +
             scale_x_yearmon(format = "%h'%y",
                             breaks = unique(monthly_data$Period)) +
             scale_y_continuous(breaks = c(seq(2, 20, by = 2)))
@@ -239,4 +253,69 @@ function(input, output, session) {
                             breaks = unique(monthly_data$Period)) +
             scale_y_continuous(breaks = c(seq(0, 200, by = 5)))
     })
+    
+    # current_recov_status <- reactive({
+    #     county_recov_data() %>% 
+    #         filter(Period == max(Period))
+    # })
+    # 
+    # 
+    # 
+    # output$recovery_state_plot <- renderPlot({
+    #     statepop %>% 
+    #         left_join(current_recov_status(),
+    #                   by = c("abbr" = "State")) %>% 
+    #         plot_usmap(regions = "counties", data = ., values = "Recovery", col = "red")
+    # })
+    
+    #### Tab 4: 
+    
+    grouped_monthly_data <- reactive({
+        if (input$cluster_state == "Early benefit end status"){
+            grouped_data <- monthly_data %>% 
+                filter(Force < input$county_size_cluster[[2]] %>% gsub(",", "", .) %>% as.numeric() ,
+                       Force > input$county_size_cluster[[1]] %>% gsub(",", "", .) %>% as.numeric()) %>% 
+                mutate(Grouping = ifelse(State %in% early_unemp_states,
+                                      "Early",
+                                      "Not Early")) %>% 
+                group_by(Grouping, Period) %>% 
+                summarise(StatePercent = sum(Force * Percent) / sum(Force),
+                          StateEmploy19 = sum(Force * Employ19) / sum(Force), na.rm = TRUE) 
+            peaks <- grouped_data %>% 
+                group_by(Grouping) %>% 
+                summarise(StatePeak = max(StatePercent))
+            grouped_data %>%
+                left_join(peaks, by = "Grouping") %>% 
+                mutate(Recovery = 100 * (StatePeak - StatePercent) / max(StatePeak - StateEmploy19, 1))
+        }
+    })
+    
+    
+    
+    output$cluster_recov_plot <- renderPlot({
+        grouped_monthly_data() %>% 
+            ggplot() +
+            geom_line(aes(Period, Recovery, col = Grouping), size = 1) +
+            geom_point(aes(Period, Recovery, col = Grouping), size = 2) +
+            # geom_smooth(aes(Period, Recovery, col = Grouping), se = FALSE, method = "gam", linetype = "dashed") +
+            scale_color_viridis(discrete=TRUE) +
+            labs(x = "Time",
+                 y = "Recovery from Peak Unemployment [%]",
+                 color = cluster_legend[[1]],
+                 title = glue("Recovery for states grouped by {}")) +
+            scale_x_yearmon(format = "%h'%y",
+                            breaks = unique(monthly_data$Period)) +
+            scale_y_continuous(breaks = c(seq(0, 200, by = 5)))
+    })
+
+        
+    output$cluster_recov_table <- renderTable({
+        grouped_monthly_data() %>%
+            select(Grouping, Period, Recovery) %>%
+            mutate(Period = as.character(Period)) %>% 
+            pivot_wider(names_from = "Grouping", values_from = "Recovery") %>% 
+            mutate(across(where(is.numeric), ~lag(.x, 0) - lag(.x, 1), .names = "Change {.col}"))
+    },
+    striped = TRUE,
+    digits = 1)
 }

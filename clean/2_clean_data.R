@@ -44,7 +44,8 @@ monthly_data <- monthly_data %>%
   left_join(avg_data, by = "CountyState") %>% 
   separate(CountyState, c("County", "State"), sep = ",") %>% 
   mutate(State = trimws(State),
-         Recovery = 100 * (PeakUnemp - Percent) / pmax(PeakUnemp - Employ19, 1))
+         Recovery = 100 * (PeakUnemp - Percent) / pmax(PeakUnemp - Employ19, 1)) %>% 
+  filter(State != "PR")
 
 write.csv(monthly_data, file = "C:/Carey/Projects/unemployment_project/data/cleaned_data.csv",
           row.names = FALSE)
