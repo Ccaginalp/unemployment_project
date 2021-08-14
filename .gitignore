@@ -41,3 +41,4 @@ vignettes/*.pdf
 # Data
 
 /data/*
+!/data/Apr20_May21.xlsx
