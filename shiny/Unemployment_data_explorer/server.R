@@ -26,7 +26,6 @@ function(input, output, session) {
     library(usmap)
     
     # Define UI for application that draws a histogram
-    vars <- setdiff(names(iris), "Species")
     state_choices <- c("All", state.abb)
     early_unemp_states <- c("AK", "MO", "MS", "IA", "AL", "ID", "IN", "NE",
                             "NH", "ND", "WV", "WY", "AR", "FL", "GA", "MO",
@@ -35,8 +34,13 @@ function(input, output, session) {
     cluster_legend <- c("Benefit end status")
     
     avg_data <- rio::import("https://www.bls.gov/lau/laucnty19.xlsx")
-    monthly_data <- rio::import("https://www.bls.gov/web/metro/laucntycur14.zip")
-    
+    older_monthly_data <- rio::import("https://raw.githubusercontent.com/Ccaginalp/unemployment_project/master/data/Apr20_May21.xlsx")
+    new_monthly_data <- rio::import("https://www.bls.gov/web/metro/laucntycur14.zip")
+    old_periods <- unique(older_monthly_data[, 5])
+    new_monthly_data <- new_monthly_data %>% 
+        filter(!new_monthly_data[, 5] %in% old_periods)
+    colnames(new_monthly_data) <- colnames(older_monthly_data)
+    monthly_data <- rbind(older_monthly_data, new_monthly_data)
     
     # Cleaning data -----------------------------------------------------------
     
@@ -65,9 +69,9 @@ function(input, output, session) {
         filter(!is.na(LogForce)) %>% 
         group_by(CountyState) %>% 
         summarise(AvgSizeRoundNum = 10 ** floor(mean(LogForce)),
-                  AvgSizeRound = 10 ** floor(mean(LogForce)) %>% format(., big.mark = ","),
                   AvgSize = mean(LogForce),
                   PeakUnemp = max(Percent)) %>% 
+        mutate(AvgSizeRound = format(AvgSizeRoundNum, big.mark = ",")) %>% 
         mutate(AvgSizeRound = as.factor(AvgSizeRound))
     getSize$AvgSizeRound <- factor(getSize$AvgSizeRound, labels = sort(unique(getSize$AvgSizeRound) %>% 
                                                                            gsub(",", "", .) %>% 
@@ -104,6 +108,31 @@ function(input, output, session) {
             group_by(Period, AvgSizeRound) %>% 
             summarise(AggPercent = sum(100 * Unemployed) / sum(Force),
                       AvgPercent = sum(Force * Employ19) / sum(Force))
+    })
+    
+    state_group_sizes <- reactive({
+        county_sizes_tracker <- monthly_data %>% 
+            filter(State %in% select_state()) %>%
+            filter(!is.na(AvgSizeRound)) %>% 
+            mutate(fips = str_c(StateCode, CountyCode))
+        county_sizes_tracker$group_name <- county_sizes_tracker$AvgSizeRound
+        county_sizes_tracker
+    })
+    
+    
+    
+    output$state_group_plot <- renderPlot({
+        if(length(select_state()) > 10){
+            plot_usmap()
+        } else{
+            plot_usmap(data = state_group_sizes(), 
+                       regions = "counties",
+                       values = "group_name", 
+                       color = "blue",
+                       include = unique(select_state())) +
+                scale_fill_discrete(name = "County group")
+        }
+        
     })
     
     output$unemp_plot <- renderPlot({
@@ -200,7 +229,7 @@ function(input, output, session) {
             scale_y_continuous(breaks = c(seq(2, 20, by = 2)))
     })
     
-    ## Third tab: county recovery
+    ## Second tab: county recovery
     
     
     filtered_monthly_data3 <- reactive({
@@ -254,21 +283,30 @@ function(input, output, session) {
             scale_y_continuous(breaks = c(seq(0, 200, by = 5)))
     })
     
-    # current_recov_status <- reactive({
-    #     county_recov_data() %>% 
-    #         filter(Period == max(Period))
-    # })
-    # 
-    # 
-    # 
-    # output$recovery_state_plot <- renderPlot({
-    #     statepop %>% 
-    #         left_join(current_recov_status(),
-    #                   by = c("abbr" = "State")) %>% 
-    #         plot_usmap(regions = "counties", data = ., values = "Recovery", col = "red")
-    # })
+
     
-    #### Tab 4: 
+    #### Tab 3: 
+    
+    state_group <- reactive({
+        all_states <- monthly_data %>% 
+            mutate(fips = str_c(StateCode, CountyCode)) %>% 
+            filter(Force < input$county_size_cluster[[2]] %>% gsub(",", "", .) %>% as.numeric() ,
+                   Force > input$county_size_cluster[[1]] %>% gsub(",", "", .) %>% as.numeric())
+        all_states$group_name <- ifelse(all_states$State %in% early_unemp_states,
+                                        "Early",
+                                        "Not early")
+        all_states
+    })
+    
+    
+    
+    output$recovery_state_plot <- renderPlot({
+        plot_usmap(data = state_group(), 
+                   regions = "counties",
+                   values = "group_name", 
+                   color = "blue") +
+            scale_fill_discrete(name = "State group")
+    })
     
     grouped_monthly_data <- reactive({
         if (input$cluster_state == "Early benefit end status"){

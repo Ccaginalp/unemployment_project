@@ -143,7 +143,11 @@ dashboardPage(skin = 'blue',
                                       width = 3
                                   ),
                                   mainPanel(
-                                      plotOutput('unemp_plot')
+                                      plotOutput('unemp_plot'),
+                                      br(),
+                                      br(),
+                                      p("Counties included in visualization"),
+                                      plotOutput('state_group_plot')
                                   )
                               )
                       ),
@@ -200,7 +204,7 @@ dashboardPage(skin = 'blue',
                                   br(),
                                   br(),
                                   br(),
-                                  p("Recovery by state"),
+                                  p("Counties included in visualization"),
                                   plotOutput('recovery_state_plot')
                                 )
                               )
